@@ -40,6 +40,9 @@ const TAGS = {
   purpose: { name: '目的に合った見積もり', tip: '足りなくならないようにするなら切り上げ、少なくともいくらあるかを知るなら切り捨てを使います。' },
   range: { name: '以上・以下・未満の範囲', tip: '「以上・以下」はその数をふくみ、「未満」はふくみません。数直線にかいて確かめます。' },
   divEst: { name: '商の見当となおし方', tip: 'わる数を何十とみて見当をつけます。ひけなければ商を1小さく、あまりがわる数以上なら1大きくします。' },
+  divMul: { name: 'わり算の中のかけ算', tip: '「わる数 × 商」をくり上がりに気をつけて計算します。くり上がりは小さくメモしよう。' },
+  divSub: { name: 'わり算の中のひき算', tip: '一の位から順にひきます。ひけないときは、となりの位から1かりてきます。' },
+  divDown: { name: '数のおろしわすれ', tip: 'ひき算のあとは、つぎの位の数字をおろしてから、また商をたてます。' },
   divRem: { name: 'あまりがわる数より大きい', tip: '最後に「あまり < わる数」になっているか必ず確かめます。' },
   divPlace: { name: '商のたつ位・0 のたてわすれ', tip: '下の位を指でかくして、商がどの位からたつかを決めます。おろした数がわる数より小さいときは 0 をたてます。' },
   decAlign: { name: '小数点をそろえていない', tip: '小数のたし算・ひき算は、小数点の位置をたてにそろえて計算します。' },
@@ -224,14 +227,44 @@ function genDiv(L) {
   }
   return { D: 221, v: 32 };
 }
+/* 筆算の正しい途中の行（かけ算の答え・ひき算(おろした後)の答え） */
+function divExpected(D, v) {
+  const st = divSteps(D, v), r = D % v, idx = st.map((x, i) => i).filter(i => i === 0 || st[i].q > 0);
+  return idx.map((i, m) => ({ q: st[i].q, prod: st[i].q * v, diff: st[i].cur - st[i].q * v, after: m + 1 < idx.length ? st[idx[m + 1]].cur : r }));
+}
+/* 子どもが書いた筆算から、どこでまちがえたかを調べる */
+function divProcDiag(D, v, proc) {
+  if (!proc) return null;
+  const seq = proc.rows.map((t, i) => ({ t: t.replace(/\s/g, ''), i })).filter(x => x.t !== '');
+  if (!seq.length) return null;
+  const ex = divExpected(D, v);
+  for (let m = 0; m < ex.length; m++) {
+    const P = seq[2 * m], A = seq[2 * m + 1];
+    if (!P) return { tag: null, row: null, msg: '筆算がとちゅうまでしか書かれていません。最後まで書いてみよう。' };
+    const pv = Number(P.t);
+    if (pv !== ex[m].prod) {
+      if (pv % v === 0 && pv / v <= 9) return { tag: 'divEst', row: P.i, msg: `${m + 1}回目にたてた商がちがいます（${v}×${pv / v}＝${pv}）。` };
+      return { tag: 'divMul', row: P.i, msg: `${m + 1}回目のかけ算 ${v}×${ex[m].q} がちがいます（正しくは ${ex[m].prod}）。` };
+    }
+    if (!A) return { tag: null, row: null, msg: '筆算がとちゅうまでしか書かれていません。' };
+    const av = Number(A.t);
+    if (av !== ex[m].after) {
+      if (av === ex[m].diff && ex[m].after !== ex[m].diff) return { tag: 'divDown', row: A.i, msg: `${m + 1}回目のひき算のあと、つぎの数字をおろしていません。` };
+      return { tag: 'divSub', row: A.i, msg: `${m + 1}回目のひき算がちがいます（正しくは ${ex[m].diff}${ex[m].after !== ex[m].diff ? `、おろして ${ex[m].after}` : ''}）。` };
+    }
+  }
+  return null;
+}
 function divProblem(D, v) {
   const q = Math.floor(D / v), r = D % v;
   return {
     q: `<span class="num-font" style="font-size:1.4em">${D} ÷ ${v}</span> を筆算で計算しましょう。`,
-    input: 'div', ans: { q, r }, ansText: `${q}${r ? ` あまり ${r}` : ''}`, wide: true,
-    sol: `${divSteps(D, v).map((s, i) => `${i + 1}回目：${s.cur} ÷ ${v} → 商 ${s.q}`).join('、')}。<br>たしかめ：${v} × ${q} ＋ ${r} ＝ ${D}`,
-    diag: u => {
-      if (u.q === q && u.r !== r) return u.r >= v ? 'divRem' : 'calc';
+    input: 'div', scratch: { D, v }, ans: { q, r }, ansText: `${q}${r ? ` あまり ${r}` : ''}`, wide: true,
+    sol: `${divExpected(D, v).map((s, i) => `${i + 1}回目：商 ${s.q} → ${v}×${s.q}＝${s.prod} → ひいて ${s.diff}${s.after !== s.diff ? ` → おろして ${s.after}` : ''}`).join('<br>')}<br>たしかめ：${v} × ${q} ＋ ${r} ＝ ${D}`,
+    diag: (u, proc) => {
+      if (u.q === q && u.r !== r && u.r >= v) return 'divRem';
+      const pd = divProcDiag(D, v, proc); if (pd && pd.tag) return pd.tag;
+      if (u.q === q && u.r !== r) return u.r >= v ? 'divRem' : 'divSub';
       if (u.r >= v) return 'divRem';
       const sq = String(q);
       if (sq.includes('0') && String(u.q) === sq.replace(/0/g, '')) return 'divPlace';
@@ -972,8 +1005,8 @@ function check(p, u) {
   }
   return false;
 }
-function diagnose(p, u) {
-  if (p.diag) { const t = p.diag(u); if (t) return t; }
+function diagnose(p, u, proc) {
+  if (p.diag) { const t = p.diag(u, proc); if (t) return t; }
   for (const w of p.wrongs || []) { if (p.input === 'num' && Math.abs(u - w.v) < 1e-9) return w.tag; if (p.input === 'choice' && u === w.v) return w.tag; }
   if (p.input === 'frac' && p.form && p.form !== 'any') { const uv = (u.w * u.d + u.n) / u.d, av = (p.ans.w * p.ans.d + p.ans.n) / p.ans.d; if (Math.abs(uv - av) < 1e-9) return 'fracConv'; }
   return p.defTag || 'calc';
@@ -987,7 +1020,7 @@ function uText(p, u) {
 function inputHTML(p) {
   const I = (n, cls = '') => `<input name="${n}" class="in ${cls}" inputmode="decimal" autocomplete="off" aria-label="答え">`;
   if (p.input === 'num') return `<div class="ansrow">${I('a')}<span>${p.label || ''}</span></div>`;
-  if (p.input === 'div') return `<div class="ansrow">商 ${I('q', 's')} あまり ${I('r', 's')}</div>`;
+  if (p.input === 'div') return `${p.scratch ? '<div class="scbox"></div>' : ''}<div class="ansrow">商 ${I('q', 's')} あまり ${I('r', 's')}</div>${p.scratch ? '<p class="note">商とあまりのらんが空のまま「こたえる」をおすと、筆算に書いた数から読みとります。</p>' : ''}`;
   if (p.input === 'pair') return `<div class="ansrow">（ ${I('x', 's')} ， ${I('y', 's')} ）</div>`;
   if (p.input === 'frac') return `<div class="ansrow">${p.form !== 'improper' ? `${I('w', 's')}<span class="note">整数</span>` : ''}<span class="fin">${I('n')}<hr>${I('d')}</span><span class="note">分子／分母${p.form === 'mixed' ? '（帯分数で）' : p.form === 'improper' ? '（仮分数で）' : '（整数のらんは空でもよい）'}</span></div>`;
   return `<div class="choices">${p.choices.map(c => `<button class="choice" data-c="${esc(c)}">${c}</button>`).join('')}</div>`;
@@ -1002,19 +1035,25 @@ function runSession(box, items, opts = {}) {
     box.style.setProperty('--ac', AREAS[unit.area].color);
     box.innerHTML = `<div class="qcard"><div class="qtop"><span>${S.i + 1} / ${S.items.length} 問</span><div class="prog"><i style="width:${S.i / S.items.length * 100}%"></i></div><span class="tag" style="background:${AREAS[unit.area].color}">${unit.title}・${kind.name}</span></div>
 <div class="qtext">${S.p.q}</div><div class="ansbox">${inputHTML(S.p)}</div>${S.p.input !== 'choice' ? '<div class="btns"><button class="btn main" data-a="ok">こたえる</button></div>' : ''}<div class="fb" aria-live="polite"></div></div>`;
-    const f = $('input', box); if (f && !('ontouchstart' in window)) f.focus();
+    S.sc = S.p.scratch ? scratchDiv($('.scbox', box), S.p.scratch.D, S.p.scratch.v) : null;
+    const f = $('input', box); if (f && !S.sc && !('ontouchstart' in window)) f.focus();
   };
   const answer = choice => {
     if (S.done) return; const p = S.p, ab = $('.ansbox', box);
+    if (S.sc) { const t = S.sc.read(), qi = $('[name=q]', ab), ri = $('[name=r]', ab); if (qi.value.trim() === '' && t.qNum !== null) qi.value = t.qNum; if (ri.value.trim() === '' && qi.value.trim() !== '' && t.last !== null) ri.value = t.last; }
     const u = p.input === 'choice' ? choice : readAns(p, ab);
     if (!valid(p, u)) { const fb = $('.fb', box); fb.innerHTML = '<div class="note">答えを数で入れてね。</div>'; ab.classList.remove('shake'); void ab.offsetWidth; ab.classList.add('shake'); return; }
-    S.done = true; const ok = check(p, u), tag = ok ? null : diagnose(p, u), it = S.items[S.i];
+    S.done = true; const proc = S.sc ? S.sc.read() : null, ok = check(p, u), tag = ok ? null : diagnose(p, u, proc), it = S.items[S.i];
+    const pd = proc && proc.any ? divProcDiag(p.scratch.D, p.scratch.v, proc) : null;
+    if (S.sc) { S.sc.lock(); if (pd && pd.row !== null && pd.row !== undefined) S.sc.mark(pd.row); }
     S.res.push({ ...it, ok, tag });
-    DB.log.push({ t: Date.now(), u: it.u, k: it.k, ok, tag, q: strip(p.q).slice(0, 120), ua: uText(p, u), ca: strip(p.ansText) }); save();
+    const ent = { t: Date.now(), u: it.u, k: it.k, ok, tag, q: strip(p.q).slice(0, 120), ua: uText(p, u), ca: strip(p.ansText) };
+    if (proc && proc.any) ent.proc = { D: p.scratch.D, v: p.scratch.v, q: proc.q, rows: proc.rows };
+    DB.log.push(ent); save();
     if (p.input === 'choice') $$('.choice', box).forEach(b => { b.disabled = true; if (b.dataset.c === p.ans) b.classList.add('good'); else if (b.dataset.c === u) b.classList.add('bad'); });
     $$('input', ab).forEach(i => i.disabled = true); $('[data-a=ok]', box)?.remove();
-    $('.fb', box).innerHTML = ok ? `<div class="ok">せいかい！</div><div class="sol">${p.sol}</div><div class="btns"><button class="btn main" data-a="next">つぎへ</button></div>`
-      : `<div class="ng">ざんねん…　正しい答えは ${p.ansText}</div><div class="tagbox"><b>つまずき：${TAGS[tag].name}</b><br>${TAGS[tag].tip}</div><div class="sol">${p.sol}</div><div class="btns"><button class="btn main" data-a="again">にた問題でもう一度</button><button class="btn" data-a="next">つぎへ</button></div>`;
+    $('.fb', box).innerHTML = ok ? `<div class="ok">せいかい！</div>${pd ? `<div class="tagbox"><b>答えは合っています。筆算も見なおそう：</b>${pd.msg}</div>` : ''}<div class="sol">${p.sol}</div><div class="btns"><button class="btn main" data-a="next">つぎへ</button></div>`
+      : `<div class="ng">ざんねん…　正しい答えは ${p.ansText}</div><div class="tagbox"><b>つまずき：${TAGS[tag].name}</b><br>${pd ? `<b>筆算を見ると：</b>${pd.msg}${pd.row !== null ? '（赤くなった段）' : ''}<br>` : ''}${TAGS[tag].tip}</div><div class="sol">${p.sol}</div><div class="btns"><button class="btn main" data-a="again">にた問題でもう一度</button><button class="btn" data-a="next">つぎへ</button></div>`;
     $('.fb .btn', box)?.focus({ preventScroll: true });
   };
   const finish = () => {
@@ -1037,6 +1076,66 @@ ${Object.keys(tags).length ? `<div class="tagbox"><b>今回のつまずき</b><u
   };
   box.onkeydown = e => { if (e.key === 'Enter' && e.target.matches('input') && !S.done) { e.preventDefault(); answer(); } };
   next();
+}
+
+
+/* ---------- 筆算を書きこむマス目 ---------- */
+function scratchDiv(el, D, v) {
+  const s = String(D), n = s.length, nRows = divExpected(D, v).length * 2 + 2;
+  let g, sel = null, locked = false, pen = false, bad = null, drawing = false;
+  const reset = () => { g = { q: Array(n).fill(''), rows: Array.from({ length: nRows }, () => Array(n).fill('')) }; };
+  reset();
+  el.innerHTML = `<div class="sc-tools"><button class="chip" data-s="pen" aria-pressed="false">ペンでメモ：オフ</button><button class="chip" data-s="penclr">メモを消す</button><button class="chip" data-s="clr">筆算をぜんぶ消す</button></div>
+<div class="sc-wrap"><div class="dt-paper sc-paper"><div class="dt-board sc-board"></div><canvas class="sc-pen" aria-hidden="true"></canvas></div>
+<div class="sc-keys">${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(k => `<button data-s="k${k}">${k}</button>`).join('')}<button data-s="left" aria-label="左のマスへ">←</button><button data-s="k0">0</button><button data-s="right" aria-label="右のマスへ">→</button><button data-s="del" class="wide">けす</button></div></div>
+<p class="note">マスをタップして、キーで数字を書こう。商は上の段、かけ算・ひき算の答えはその下の段に書きます。くり上がりのメモは「ペンでメモ」で自由に書けます。</p>`;
+  const board = $('.sc-board', el), cv = $('.sc-pen', el), paper = $('.sc-paper', el), ctx = cv.getContext && cv.getContext('2d');
+  const arr = k => k === 'q' ? g.q : g.rows[k];
+  const isSel = (k, c) => sel && sel[0] === k && sel[1] === c;
+  const draw = () => {
+    let h = '<div></div>';
+    for (let c = 0; c < n; c++) h += `<button class="dc dq scell${isSel('q', c) ? ' ssel' : ''}" data-cell="q,${c}" aria-label="商の${c + 1}けため">${g.q[c]}</button>`;
+    h += `<div class="dv">${v}</div>`;
+    for (let c = 0; c < n; c++) h += `<div class="dc dd">${s[c]}</div>`;
+    g.rows.forEach((row, r) => { h += '<div></div>'; row.forEach((x, c) => { h += `<button class="dc scell${r % 2 ? ' dl' : ''}${bad === r ? ' sbad' : ''}${isSel(r, c) ? ' ssel' : ''}" data-cell="${r},${c}" aria-label="${r + 1}段め ${c + 1}れつめ">${x}</button>`; }); });
+    board.style.gridTemplateColumns = `calc(var(--c)*2) repeat(${n},var(--c))`; board.innerHTML = h;
+  };
+  const put = d => { if (!sel || locked) return; const [k, c] = sel; arr(k)[c] = d; if (k === 'q') { if (c < n - 1) sel = [k, c + 1]; } else if (c > 0) sel = [k, c - 1]; draw(); };
+  const move = dx => { if (!sel || locked) return; const c = Math.min(n - 1, Math.max(0, sel[1] + dx)); sel = [sel[0], c]; draw(); };
+  const fit = () => { if (!ctx) return; const dpr = window.devicePixelRatio || 1, w = paper.clientWidth, h = paper.clientHeight; if (!w || cv.width === Math.round(w * dpr) && cv.height === Math.round(h * dpr)) return; cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.strokeStyle = '#d4313a'; };
+  el.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.cell) { if (locked) return; const [k, c] = b.dataset.cell.split(','); sel = [k === 'q' ? 'q' : +k, +c]; return draw(); }
+    const a = b.dataset.s; if (!a) return;
+    if (a[0] === 'k') put(a.slice(1));
+    else if (a === 'del') { if (sel && !locked) { arr(sel[0])[sel[1]] = ''; draw(); } }
+    else if (a === 'left') move(-1); else if (a === 'right') move(1);
+    else if (a === 'pen') { pen = !pen; b.textContent = `ペンでメモ：${pen ? 'オン' : 'オフ'}`; b.classList.toggle('on', pen); b.setAttribute('aria-pressed', pen); cv.classList.toggle('on', pen); fit(); }
+    else if (a === 'penclr') { if (ctx) ctx.clearRect(0, 0, cv.width, cv.height); }
+    else if (a === 'clr' && !locked) { reset(); sel = null; draw(); }
+  });
+  const pos = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  cv.addEventListener('pointerdown', e => { if (!pen || !ctx) return; drawing = true; try { cv.setPointerCapture(e.pointerId); } catch (x) { /* noop */ } const [x, y] = pos(e); ctx.beginPath(); ctx.moveTo(x, y); });
+  cv.addEventListener('pointermove', e => { if (!drawing) return; const [x, y] = pos(e); ctx.lineTo(x, y); ctx.stroke(); });
+  const end = () => { drawing = false; }; cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+  const onKey = e => {
+    if (!el.isConnected) return window.removeEventListener('keydown', onKey);
+    if (!sel || locked || e.target.matches('input,select,textarea')) return;
+    if (/^[0-9]$/.test(e.key)) put(e.key); else if (e.key === 'Backspace' || e.key === 'Delete') { arr(sel[0])[sel[1]] = ''; draw(); } else if (e.key === 'ArrowLeft') move(-1); else if (e.key === 'ArrowRight') move(1);
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { const k = sel[0], d = e.key === 'ArrowUp' ? -1 : 1; let nk = k === 'q' ? (d > 0 ? 0 : 'q') : k + d; if (nk === -1) nk = 'q'; if (nk === 'q' || (nk >= 0 && nk < nRows)) { sel = [nk, sel[1]]; draw(); } }
+    else return; e.preventDefault();
+  };
+  window.addEventListener('keydown', onKey);
+  draw(); setTimeout(fit, 0);
+  return {
+    read() {
+      const q = g.q.map(x => x || ' ').join(''), rows = g.rows.map(r => r.map(x => x || ' ').join(''));
+      const qd = q.replace(/\s/g, ''), filled = rows.filter(r => r.trim());
+      return { q, rows, any: !!(qd || filled.length), qNum: qd ? Number(qd) : null, last: filled.length ? Number(filled.at(-1).replace(/\s/g, '')) : null };
+    },
+    lock() { locked = true; sel = null; draw(); },
+    mark(r) { bad = r; draw(); },
+  };
 }
 
 /* ---------- わり算の筆算ツール ---------- */
@@ -1150,6 +1249,11 @@ function review() {
 }
 
 /* ---------- 4. 保護者のページ・プリント ---------- */
+function miniDiv(pr) {
+  const n = String(pr.D).length; let rows = pr.rows.slice(); while (rows.length && !rows.at(-1).trim()) rows.pop();
+  const cells = (str, cls = '') => str.padEnd(n).split('').map(c => `<td class="${cls}">${c.trim() ? esc(c) : ''}</td>`).join('');
+  return `<table class="mini" aria-label="お子さんが書いた筆算"><tr><td></td>${cells(pr.q)}</tr><tr><td class="dvm">${pr.v}</td>${cells(String(pr.D), 'dd')}</tr>${rows.map((r, i) => `<tr><td></td>${cells(r, i % 2 ? 'dl' : '')}</tr>`).join('')}</table>`;
+}
 const fmtDate = t => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
 function parent() {
@@ -1162,7 +1266,7 @@ function parent() {
 <section class="card"><h2>単元ごとの正答率（最近20問）</h2>${UNITS.map(u => { const s = unitStat(u.id); return `<div class="urow" style="--ac:${AREAS[u.area].color}"><span>${u.title.replace(/（.*）/, '')}</span><div class="meter"><i style="width:${s.acc ?? 0}%"></i></div><em>${s.n ? `${s.acc}%・${s.n}問` : '—'}</em></div>`; }).join('')}</section>
 <section class="card"><h2>つまずきの傾向</h2>${ranks.length ? ranks.slice(0, 8).map(r => `<div class="trow"><b>${TAGS[r.t].name}</b>　${r.n}回<br><small>${r.units.join('・')}</small><br>${TAGS[r.t].tip}</div>`).join('') : '<p class="note">まだまちがいの記録はありません。</p>'}
 ${weak.length ? `<h3>今、復習が必要な問題の種類</h3><ul>${weak.slice(0, 6).map(x => `<li>${U(x.u).title}・${K(x.u, x.k).name}（最近${x.n}問中${x.err}問）</li>`).join('')}</ul>` : ''}</section>
-<section class="card full"><h2>最近まちがえた問題</h2>${wrong.length ? `<div style="overflow-x:auto"><table class="mtable"><thead><tr><th>日時</th><th>単元</th><th>問題</th><th>お子さんの答え</th><th>正しい答え</th><th>つまずき</th></tr></thead><tbody>${wrong.map(e => `<tr><td class="c">${fmtDate(e.t)}</td><td>${esc(U(e.u)?.title || '')}</td><td>${esc(e.q)}</td><td class="c">${esc(e.ua)}</td><td class="c">${esc(e.ca)}</td><td>${esc(TAGS[e.tag]?.name || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">まだまちがいの記録はありません。</p>'}</section>
+<section class="card full"><h2>最近まちがえた問題</h2>${wrong.length ? `<div style="overflow-x:auto"><table class="mtable"><thead><tr><th>日時</th><th>単元</th><th>問題</th><th>お子さんの答え</th><th>正しい答え</th><th>つまずき</th></tr></thead><tbody>${wrong.map(e => `<tr><td class="c">${fmtDate(e.t)}</td><td>${esc(U(e.u)?.title || '')}</td><td>${esc(e.q)}${e.proc ? miniDiv(e.proc) : ''}</td><td class="c">${esc(e.ua)}</td><td class="c">${esc(e.ca)}</td><td>${esc(TAGS[e.tag]?.name || '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">まだまちがいの記録はありません。</p>'}</section>
 <section class="card full" id="maker"><h2>プリントをつくる</h2>
 <div class="radio"><label><input type="radio" name="pm" value="weak" ${weak.length ? 'checked' : ''}> つまずきに合わせたプリント</label><label><input type="radio" name="pm" value="unit" ${weak.length ? '' : 'checked'}> 単元をえらんで課題プリント</label></div>
 <div id="upick" class="checks" style="margin:8px 0 12px"></div>
